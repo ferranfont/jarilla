@@ -1,5 +1,6 @@
 import yfinance as yf
 import pandas as pd
+import os
 from chart_spy import create_eurusd_chart
 
 def get_spy_data():
@@ -7,8 +8,13 @@ def get_spy_data():
     
     hist = spy.history(period="1mo")
     
+    # Crear carpeta outputs y guardar CSV
+    os.makedirs("outputs", exist_ok=True)
+    hist.to_csv("outputs/EURUSD.csv")
+    
     print("EURUSD - Últimos 6 meses:")
     print(hist.tail(10))
+    print(f"💾 CSV guardado en: outputs/EURUSD.csv")
     
     info = spy.info
     print(f"\nPrecio actual: ${info.get('currentPrice', 'N/A')}")
