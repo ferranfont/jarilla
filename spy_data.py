@@ -6,7 +6,7 @@ from chart_spy import create_eurusd_chart
 def get_spy_data():
     spy = yf.Ticker("EURUSD=X")
     
-    hist = spy.history(period="1mo")
+    hist = spy.history(period="1mo", interval="15m")
     
     # Crear carpeta outputs y guardar CSV
     os.makedirs("outputs", exist_ok=True)

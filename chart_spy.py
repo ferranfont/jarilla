@@ -10,23 +10,38 @@ import pandas as pd
 
 def create_eurusd_chart():
     """Crear gráfico de velas EUR/USD con formato de fecha limpio"""
-    print("📡 Descargando datos EUR/USD...")
+    print("📂 Leyendo datos EUR/USD desde archivo local...")
     
-    # Obtener datos con intervalo específico para velas más definidas
-    eurusd = yf.Ticker("EURUSD=X")
-    hist = eurusd.history(period="1mo", interval="15m")  # Velas de 15 minutos
+    # Leer datos desde el archivo CSV local
+    csv_path = "outputs/EURUSD.csv"
     
-    if hist.empty:
-        print("❌ No se pudieron obtener datos. Intentando con datos diarios...")
-        hist = eurusd.history(period="6mo", interval="1d")
-    
-    # Filtrar solo días de semana (el forex no opera fines de semana)
-    hist = hist[hist.index.weekday < 5]
-    
-    # Crear etiquetas de tiempo limpias para el eje X
-    hist.index = hist.index.strftime('%d/%m %H:%M')
-    
-    print(f"✅ Datos obtenidos: {len(hist)} velas")
+    try:
+        if not os.path.exists(csv_path):
+            print(f"❌ No se encontró el archivo {csv_path}")
+            print("💡 Ejecuta primero 'python spy_data.py' para generar los datos")
+            return
+        
+        # Leer CSV y configurar el índice de fecha
+        hist = pd.read_csv(csv_path, index_col=0, parse_dates=True)
+        
+        if hist.empty:
+            print("❌ El archivo CSV está vacío")
+            return
+            
+        print(f"✅ Datos cargados desde {csv_path}: {len(hist)} registros")
+        
+        # Filtrar solo días de semana (el forex no opera fines de semana)
+        hist = hist[hist.index.weekday < 5]
+        
+        # Crear etiquetas de tiempo limpias para el eje X
+        hist.index = hist.index.strftime('%d/%m %H:%M')
+        
+        print(f"✅ Datos procesados: {len(hist)} velas")
+        
+    except Exception as e:
+        print(f"❌ Error al leer el archivo CSV: {e}")
+        print("💡 Ejecuta primero 'python spy_data.py' para generar los datos")
+        return
     
     # Create subplots
     fig = make_subplots(
@@ -169,7 +184,7 @@ def create_eurusd_chart():
     # Precio actual para el print
     current_price = hist['Close'].iloc[-1]
     
-    # Configuración del archivo HTML
+    # Configuración del archivo HTML temporal (para abrir en navegador)
     temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False)
     fig.write_html(
         temp_file.name, 
@@ -189,7 +204,27 @@ def create_eurusd_chart():
     )
     temp_file.close()
     
-    print(f"✅ Gráfico guardado en: {temp_file.name}")
+    # Guardar copia permanente en la carpeta charts
+    os.makedirs("charts", exist_ok=True)
+    chart_filename = f"charts/eurusd_chart_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.html"
+    fig.write_html(
+        chart_filename,
+        config={
+            'displayModeBar': True,
+            'displaylogo': False,
+            'modeBarButtonsToRemove': ['select2d', 'lasso2d'],
+            'toImageButtonOptions': {
+                'format': 'png',
+                'filename': 'eurusd_clean_chart',
+                'height': 800,
+                'width': 1200,
+                'scale': 2
+            }
+        }
+    )
+    
+    print(f"✅ Gráfico abierto en navegador: {temp_file.name}")
+    print(f"💾 Gráfico guardado en: {chart_filename}")
     print(f"📊 Datos: {len(hist)} velas de 15 minutos")
     print(f"📈 Precio actual: {current_price:.5f}")
     print(f"📅 Período: {hist.index[0]} - {hist.index[-1]}")
