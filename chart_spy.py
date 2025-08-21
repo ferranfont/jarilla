@@ -7,6 +7,9 @@ import webbrowser
 import tempfile
 import os
 import pandas as pd
+import sys
+sys.path.append('quant_stats')
+from extremos_realtime import RealTimeExtremeDetector, ExtremoType
 
 def create_eurusd_chart():
     """Crear gráfico de velas EUR/USD con formato de fecha limpio"""
@@ -37,6 +40,55 @@ def create_eurusd_chart():
         hist.index = hist.index.strftime('%d/%m %H:%M')
         
         print(f"✅ Datos procesados: {len(hist)} velas")
+        
+        # Detectar extremos en tiempo real
+        print("🔍 Detectando máximos y mínimos...")
+        detector = RealTimeExtremeDetector(window_size=7, confirmation_periods=3, min_strength=0.001)
+        
+        # Procesar precios como si fuera en tiempo real
+        extremos_detectados = []
+        for i, (timestamp, row) in enumerate(hist.iterrows()):
+            price = row['Close']  # Usar precio de cierre
+            confirmados = detector.add_price(price)
+            extremos_detectados.extend(confirmados)
+        
+        print(f"✅ Extremos detectados: {len(extremos_detectados)}")
+        maximos = [e for e in extremos_detectados if e.tipo == ExtremoType.MAXIMO]
+        minimos = [e for e in extremos_detectados if e.tipo == ExtremoType.MINIMO]
+        print(f"   📈 Máximos (resistencias): {len(maximos)}")
+        print(f"   📉 Mínimos (soportes): {len(minimos)}")
+        
+        # Crear DataFrame con señales de extremos
+        senales_data = []
+        hist_reset = hist.reset_index()  # Reset index para acceso por índice numérico
+        
+        for extremo in extremos_detectados:
+            if extremo.index < len(hist_reset):
+                row_data = hist_reset.iloc[extremo.index]
+                senal = {
+                    'timestamp': row_data.name if hasattr(row_data, 'name') else hist_reset.index[extremo.index],
+                    'tipo': 'resistencia' if extremo.tipo == ExtremoType.MAXIMO else 'soporte',
+                    'close': row_data['Close'],
+                    'open': row_data['Open'],
+                    'high': row_data['High'],
+                    'low': row_data['Low'],
+                    'volume': row_data.get('Volume', 0),  # 0 si no hay volumen
+                    'extremo_price': extremo.price,
+                    'index_posicion': extremo.index
+                }
+                senales_data.append(senal)
+        
+        # Crear DataFrame y guardar en CSV
+        if senales_data:
+            df_senales = pd.DataFrame(senales_data)
+            # Guardar en outputs
+            os.makedirs("outputs", exist_ok=True)
+            csv_senales_path = f"outputs/senales_extremos_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            df_senales.to_csv(csv_senales_path, index=False)
+            print(f"💾 Señales guardadas en: {csv_senales_path}")
+            print(f"📊 Total señales almacenadas: {len(df_senales)}")
+        else:
+            print("⚠️ No se detectaron señales para guardar")
         
     except Exception as e:
         print(f"❌ Error al leer el archivo CSV: {e}")
@@ -70,6 +122,71 @@ def create_eurusd_chart():
         ),
         row=1, col=1
     )
+    
+    # Añadir señales de extremos detectados
+    if extremos_detectados:
+        # Preparar datos para los extremos
+        indices_timestamp = list(hist.index)
+        
+        # Máximos (resistencias) - puntos verdes por encima del high
+        max_x = []
+        max_y = []
+        for extremo in maximos:
+            if extremo.index < len(indices_timestamp):
+                timestamp = indices_timestamp[extremo.index]
+                # Obtener el high de esa vela y colocar el punto ligeramente arriba
+                high_price = hist.loc[timestamp, 'High']
+                offset = (hist['High'].max() - hist['Low'].min()) * 0.002  # 0.2% del rango total
+                max_x.append(timestamp)
+                max_y.append(high_price + offset)
+        
+        if max_x:
+            fig.add_trace(
+                go.Scatter(
+                    x=max_x,
+                    y=max_y,
+                    mode='markers',
+                    name='Resistencias',
+                    marker=dict(
+                        symbol='circle',
+                        size=6,
+                        color='green',
+                        line=dict(width=1, color='darkgreen')
+                    ),
+                    hovertemplate='<b>Resistencia</b><br>Precio: %{y}<br>Tiempo: %{x}<extra></extra>'
+                ),
+                row=1, col=1
+            )
+        
+        # Mínimos (soportes) - puntos rojos por debajo del low
+        min_x = []
+        min_y = []
+        for extremo in minimos:
+            if extremo.index < len(indices_timestamp):
+                timestamp = indices_timestamp[extremo.index]
+                # Obtener el low de esa vela y colocar el punto ligeramente abajo
+                low_price = hist.loc[timestamp, 'Low']
+                offset = (hist['High'].max() - hist['Low'].min()) * 0.002  # 0.2% del rango total
+                min_x.append(timestamp)
+                min_y.append(low_price - offset)
+        
+        if min_x:
+            fig.add_trace(
+                go.Scatter(
+                    x=min_x,
+                    y=min_y,
+                    mode='markers',
+                    name='Soportes',
+                    marker=dict(
+                        symbol='circle',
+                        size=6,
+                        color='red',
+                        line=dict(width=1, color='darkred')
+                    ),
+                    hovertemplate='<b>Soporte</b><br>Precio: %{y}<br>Tiempo: %{x}<extra></extra>'
+                ),
+                row=1, col=1
+            )
     
     # Add volume/range bars
     if 'Volume' in hist.columns and hist['Volume'].sum() > 0:
