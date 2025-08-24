@@ -10,6 +10,7 @@ import pandas as pd
 import sys
 sys.path.append('quant_stats')
 from extremos_realtime import RealTimeExtremeDetector, ExtremoType
+from zigzag_detector import ZigzagDetector, ZigzagDirection
 
 def create_eurusd_chart():
     """Crear gráfico de velas EUR/USD con formato de fecha limpio"""
@@ -43,30 +44,52 @@ def create_eurusd_chart():
         
         # Detectar extremos en tiempo real
         print("🔍 Detectando máximos y mínimos...")
-        detector = RealTimeExtremeDetector(window_size=7, confirmation_periods=3, min_strength=0.001)
+        
+        # Detector original (ventana deslizante)
+        detector_ventana = RealTimeExtremeDetector(window_size=7, confirmation_periods=3, min_strength=0.001)
+        
+        # Detector Zigzag (cambio porcentual)
+        detector_zigzag = ZigzagDetector(min_change_pct=0.12, mode="percentage")
         
         # Procesar precios como si fuera en tiempo real
         extremos_detectados = []
+        zigzag_points = []
+        
         for i, (timestamp, row) in enumerate(hist.iterrows()):
             price = row['Close']  # Usar precio de cierre
-            confirmados = detector.add_price(price)
+            
+            # Detector original
+            confirmados = detector_ventana.add_price(price)
             extremos_detectados.extend(confirmados)
+            
+            # Detector Zigzag
+            zigzag_point = detector_zigzag.add_price(price)
+            if zigzag_point:
+                zigzag_points.append(zigzag_point)
         
-        print(f"✅ Extremos detectados: {len(extremos_detectados)}")
+        print(f"✅ Extremos detectados (ventana): {len(extremos_detectados)}")
         maximos = [e for e in extremos_detectados if e.tipo == ExtremoType.MAXIMO]
         minimos = [e for e in extremos_detectados if e.tipo == ExtremoType.MINIMO]
         print(f"   📈 Máximos (resistencias): {len(maximos)}")
         print(f"   📉 Mínimos (soportes): {len(minimos)}")
         
-        # Crear DataFrame con señales de extremos
+        print(f"✅ Puntos Zigzag detectados: {len(zigzag_points)}")
+        zigzag_peaks = [z for z in zigzag_points if z.direction == ZigzagDirection.UP]
+        zigzag_valleys = [z for z in zigzag_points if z.direction == ZigzagDirection.DOWN]
+        print(f"   🔺 Picos Zigzag: {len(zigzag_peaks)}")
+        print(f"   🔻 Valles Zigzag: {len(zigzag_valleys)}")
+        
+        # Crear DataFrame con señales de extremos (ventana + zigzag)
         senales_data = []
         hist_reset = hist.reset_index()  # Reset index para acceso por índice numérico
         
+        # Añadir extremos del detector de ventana
         for extremo in extremos_detectados:
             if extremo.index < len(hist_reset):
                 row_data = hist_reset.iloc[extremo.index]
                 senal = {
                     'timestamp': row_data.name if hasattr(row_data, 'name') else hist_reset.index[extremo.index],
+                    'detector': 'ventana',
                     'tipo': 'resistencia' if extremo.tipo == ExtremoType.MAXIMO else 'soporte',
                     'close': row_data['Close'],
                     'open': row_data['Open'],
@@ -75,6 +98,24 @@ def create_eurusd_chart():
                     'volume': row_data.get('Volume', 0),  # 0 si no hay volumen
                     'extremo_price': extremo.price,
                     'index_posicion': extremo.index
+                }
+                senales_data.append(senal)
+        
+        # Añadir puntos Zigzag
+        for zigzag in zigzag_points:
+            if zigzag.index < len(hist_reset):
+                row_data = hist_reset.iloc[zigzag.index]
+                senal = {
+                    'timestamp': row_data.name if hasattr(row_data, 'name') else hist_reset.index[zigzag.index],
+                    'detector': 'zigzag',
+                    'tipo': 'pico' if zigzag.direction == ZigzagDirection.UP else 'valle',
+                    'close': row_data['Close'],
+                    'open': row_data['Open'],
+                    'high': row_data['High'],
+                    'low': row_data['Low'],
+                    'volume': row_data.get('Volume', 0),
+                    'extremo_price': zigzag.price,
+                    'index_posicion': zigzag.index
                 }
                 senales_data.append(senal)
         
@@ -128,17 +169,15 @@ def create_eurusd_chart():
         # Preparar datos para los extremos
         indices_timestamp = list(hist.index)
         
-        # Máximos (resistencias) - puntos verdes por encima del high
+        # Máximos (resistencias) - puntos verdes en el close
         max_x = []
         max_y = []
         for extremo in maximos:
             if extremo.index < len(indices_timestamp):
                 timestamp = indices_timestamp[extremo.index]
-                # Obtener el high de esa vela y colocar el punto ligeramente arriba
-                high_price = hist.loc[timestamp, 'High']
-                offset = (hist['High'].max() - hist['Low'].min()) * 0.002  # 0.2% del rango total
+                # Usar el precio close de la vela (que es el extremo.price)
                 max_x.append(timestamp)
-                max_y.append(high_price + offset)
+                max_y.append(extremo.price)  # extremo.price es el close
         
         if max_x:
             fig.add_trace(
@@ -158,17 +197,15 @@ def create_eurusd_chart():
                 row=1, col=1
             )
         
-        # Mínimos (soportes) - puntos rojos por debajo del low
+        # Mínimos (soportes) - puntos rojos en el close
         min_x = []
         min_y = []
         for extremo in minimos:
             if extremo.index < len(indices_timestamp):
                 timestamp = indices_timestamp[extremo.index]
-                # Obtener el low de esa vela y colocar el punto ligeramente abajo
-                low_price = hist.loc[timestamp, 'Low']
-                offset = (hist['High'].max() - hist['Low'].min()) * 0.002  # 0.2% del rango total
+                # Usar el precio close de la vela (que es el extremo.price)
                 min_x.append(timestamp)
-                min_y.append(low_price - offset)
+                min_y.append(extremo.price)  # extremo.price es el close
         
         if min_x:
             fig.add_trace(
@@ -187,6 +224,85 @@ def create_eurusd_chart():
                 ),
                 row=1, col=1
             )
+        
+        # Añadir puntos Zigzag al gráfico (diferentes colores/formas)
+        if zigzag_points:
+            indices_timestamp = list(hist.index)
+            
+            # Picos Zigzag - diamantes azules
+            zigzag_peak_x = []
+            zigzag_peak_y = []
+            for zigzag in zigzag_peaks:
+                if zigzag.index < len(indices_timestamp):
+                    zigzag_peak_x.append(indices_timestamp[zigzag.index])
+                    zigzag_peak_y.append(zigzag.price)
+            
+            if zigzag_peak_x:
+                fig.add_trace(
+                    go.Scatter(
+                        x=zigzag_peak_x,
+                        y=zigzag_peak_y,
+                        mode='markers',
+                        name='Zigzag Picos',
+                        marker=dict(
+                            symbol='diamond',
+                            size=8,
+                            color='blue',
+                            line=dict(width=2, color='darkblue')
+                        ),
+                        hovertemplate='<b>Zigzag Pico</b><br>Precio: %{y}<br>Tiempo: %{x}<extra></extra>'
+                    ),
+                    row=1, col=1
+                )
+            
+            # Valles Zigzag - diamantes naranjas
+            zigzag_valley_x = []
+            zigzag_valley_y = []
+            for zigzag in zigzag_valleys:
+                if zigzag.index < len(indices_timestamp):
+                    zigzag_valley_x.append(indices_timestamp[zigzag.index])
+                    zigzag_valley_y.append(zigzag.price)
+            
+            if zigzag_valley_x:
+                fig.add_trace(
+                    go.Scatter(
+                        x=zigzag_valley_x,
+                        y=zigzag_valley_y,
+                        mode='markers',
+                        name='Zigzag Valles',
+                        marker=dict(
+                            symbol='diamond',
+                            size=8,
+                            color='orange',
+                            line=dict(width=2, color='darkorange')
+                        ),
+                        hovertemplate='<b>Zigzag Valle</b><br>Precio: %{y}<br>Tiempo: %{x}<extra></extra>'
+                    ),
+                    row=1, col=1
+                )
+                
+            # Conectar puntos Zigzag con línea
+            if len(zigzag_points) > 1:
+                all_zigzag_x = []
+                all_zigzag_y = []
+                for zigzag in sorted(zigzag_points, key=lambda z: z.index):
+                    if zigzag.index < len(indices_timestamp):
+                        all_zigzag_x.append(indices_timestamp[zigzag.index])
+                        all_zigzag_y.append(zigzag.price)
+                
+                if len(all_zigzag_x) > 1:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=all_zigzag_x,
+                            y=all_zigzag_y,
+                            mode='lines',
+                            name='Línea Zigzag',
+                            line=dict(color='purple', width=1, dash='dot'),
+                            hoverinfo='skip',
+                            showlegend=False
+                        ),
+                        row=1, col=1
+                    )
     
     # Add volume/range bars
     if 'Volume' in hist.columns and hist['Volume'].sum() > 0:
